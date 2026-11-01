@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "NfcKeyRecovery public defaults",
+  "version": "2026.11.01",
+  "description": "Public factory, NFC Forum and test keys only.",
+  "license": "CC0-1.0",
+  "keys": [
+    {"value": "FFFFFFFFFFFF", "label": "Factory default"},
+    {"value": "000000000000", "label": "All zero test key"},
+    {"value": "A0A1A2A3A4A5", "label": "NFC Forum MAD Key A"},
+    {"value": "B0B1B2B3B4B5", "label": "NFC Forum MAD Key B"},
+    {"value": "D3F7D3F7D3F7", "label": "NFC Forum content key"},
+    {"value": "4D3A99C351DD", "label": "NXP public sample"},
+    {"value": "1A982C7E459A", "label": "NXP public sample"}
+  ]
+}

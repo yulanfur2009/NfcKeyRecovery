@@ -1,0 +1,52 @@
+package io.github.nfckeyrecovery.data
+
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class KeyFileCodecTest {
+    @Test
+    fun parsesMctStyleKeyFilesAndRemovesDuplicates() {
+        val input = """
+            # Public defaults
+            FFFFFFFFFFFF
+            a0a1a2a3a4a5
+            FFFFFFFFFFFF ; duplicate
+            invalid
+        """.trimIndent()
+
+        val result = KeyFileCodec.parseTextKeys(input, "test")
+
+        assertEquals(listOf("FFFFFFFFFFFF", "A0A1A2A3A4A5"), result.map { it.value })
+    }
+
+    @Test
+    fun rawDumpRoundTrips() {
+        val bytes = ByteArray(1024) { (it and 0xFF).toByte() }
+
+        val dump = KeyFileCodec.importMfd(bytes, "01:02:03:04")
+        val exported = KeyFileCodec.exportMfd(dump)
+
+        assertEquals("MIFARE Classic 1K", dump.cardType)
+        assertArrayEquals(bytes, exported)
+    }
+
+    @Test
+    fun decodesTransportConfigurationAccessBits() {
+        val trailer = "FFFFFFFFFFFFFF078069FFFFFFFFFFFF".hexToBytes()
+
+        val result = decodeAccessBits(trailer)
+
+        assertTrue(result.valid)
+        assertEquals(listOf(0, 0, 0, 1), result.groups)
+    }
+
+    @Test
+    fun rejectsCorruptAccessBits() {
+        val trailer = "FFFFFFFFFFFF00000000FFFFFFFFFFFF".hexToBytes()
+
+        assertFalse(decodeAccessBits(trailer).valid)
+    }
+}
