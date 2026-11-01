@@ -58,6 +58,20 @@ data class CardDump(
     val blocks: List<BlockRecord>,
 )
 
+@Serializable
+data class EmulationProfile(
+    val id: String,
+    val name: String,
+    val sourceUid: String,
+    val sourceKind: String,
+    val createdAtEpochMillis: Long,
+    val ndefMessageHex: String? = null,
+    val classicDump: CardDump? = null,
+) {
+    val supportsAndroidHce: Boolean
+        get() = !ndefMessageHex.isNullOrBlank()
+}
+
 data class CardSnapshot(
     val uid: String,
     val technologies: List<String>,

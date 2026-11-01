@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
@@ -75,9 +76,18 @@ class KeyRepository(private val context: Context) {
                 "Key feed exceeds the 2 MB limit"
             }
             val bytes = connection.inputStream.use { input ->
-                input.readNBytes(MAX_FEED_BYTES + 1)
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    require(output.size() + count <= MAX_FEED_BYTES) {
+                        "Key feed exceeds the 2 MB limit"
+                    }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
             }
-            require(bytes.size <= MAX_FEED_BYTES) { "Key feed exceeds the 2 MB limit" }
             val sha256 = bytes.sha256()
             if (source.expectedSha256.isNotBlank()) {
                 require(sha256.equals(source.expectedSha256, ignoreCase = true)) {
@@ -113,7 +123,10 @@ class KeyRepository(private val context: Context) {
         val stored = runCatching {
             json.decodeFromString<List<RemoteKeySource>>(sourcesFile.readText())
         }.getOrNull()
-        return stored ?: DEFAULT_SOURCES
+        if (stored == null) return DEFAULT_SOURCES
+        return (stored + DEFAULT_SOURCES.filter { default ->
+            stored.none { it.url == default.url }
+        }).sortedBy { it.name.lowercase() }
     }
 
     private fun saveKeys() {
@@ -158,6 +171,11 @@ class KeyRepository(private val context: Context) {
                 name = "MifareClassicTool public defaults",
                 url = "https://raw.githubusercontent.com/ikarus23/MifareClassicTool/" +
                     "master/Mifare%20Classic%20Tool/app/src/main/assets/key-files/std.keys",
+            ),
+            RemoteKeySource(
+                name = "Iceman / RRG mfc_default_keys.dic",
+                url = "https://raw.githubusercontent.com/RfidResearchGroup/proxmark3/" +
+                    "master/client/dictionaries/mfc_default_keys.dic",
             ),
         )
     }

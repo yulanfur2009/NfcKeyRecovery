@@ -23,13 +23,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.AlertDialog
@@ -72,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.nfckeyrecovery.AppState
 import io.github.nfckeyrecovery.MainViewModel
+import io.github.nfckeyrecovery.data.EmulationProfile
 import io.github.nfckeyrecovery.data.KeyEntry
 import io.github.nfckeyrecovery.data.RemoteKeySource
 import java.time.Instant
@@ -96,6 +101,8 @@ fun NfcKeyRecoveryApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsState()
     val keys by viewModel.keys.collectAsState()
     val sources by viewModel.sources.collectAsState()
+    val profiles by viewModel.emulationProfiles.collectAsState()
+    val activeProfile by viewModel.activeEmulationProfile.collectAsState()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     var tab by remember { mutableIntStateOf(0) }
@@ -156,7 +163,8 @@ fun NfcKeyRecoveryApp(viewModel: MainViewModel) {
                         Triple("读卡", Icons.Default.Nfc, 0),
                         Triple("密钥", Icons.Default.Key, 1),
                         Triple("文件", Icons.Default.Save, 2),
-                        Triple("硬件", Icons.Default.Usb, 3),
+                        Triple("模拟", Icons.Default.PhoneAndroid, 3),
+                        Triple("硬件", Icons.Default.Usb, 4),
                     ).forEach { (label, icon, index) ->
                         NavigationBarItem(
                             selected = tab == index,
@@ -188,6 +196,7 @@ fun NfcKeyRecoveryApp(viewModel: MainViewModel) {
                         onAddKey = viewModel::addManualKey,
                         onAddSource = viewModel::addSource,
                         onUpdateSource = viewModel::updateSource,
+                        onUpdateIceman = viewModel::updateIcemanDictionary,
                     )
                     2 -> FilesScreen(
                         state = state,
@@ -196,7 +205,16 @@ fun NfcKeyRecoveryApp(viewModel: MainViewModel) {
                         onExportJson = { exportJsonLauncher.launch("card-backup.json") },
                         onExportMfd = { exportMfdLauncher.launch("card-backup.mfd") },
                     )
-                    3 -> HardwareScreen(state, viewModel::detectExternalHardware)
+                    3 -> EmulationScreen(
+                        state = state,
+                        profiles = profiles,
+                        activeProfile = activeProfile,
+                        onSave = viewModel::saveCurrentEmulationProfile,
+                        onActivate = viewModel::activateEmulation,
+                        onDeactivate = viewModel::deactivateEmulation,
+                        onDelete = viewModel::deleteEmulationProfile,
+                    )
+                    4 -> HardwareScreen(state, viewModel::detectExternalHardware)
                 }
 
                 if (state.busy) {
@@ -274,6 +292,11 @@ private fun ReaderScreen(
                         "ATQA" to (card.atqa ?: "不可用"),
                         "SAK" to (card.sak ?: "不可用"),
                         "ATS" to (card.ats ?: "未返回"),
+                        "NDEF" to if (state.ndefMessageHex != null) {
+                            "${state.ndefMessageHex.length / 2} bytes，可保存模拟"
+                        } else {
+                            "未检测到"
+                        },
                         "容量" to card.sizeBytes?.let { "$it bytes" }.orEmpty(),
                         "布局" to card.sectorCount?.let { "$it 扇区 / ${card.blockCount} 块" }.orEmpty(),
                     ),
@@ -339,6 +362,7 @@ private fun KeysScreen(
     onAddKey: (String) -> Unit,
     onAddSource: (String, String, String) -> Unit,
     onUpdateSource: (RemoteKeySource) -> Unit,
+    onUpdateIceman: () -> Unit,
 ) {
     var manualKey by remember { mutableStateOf("") }
     var sourceName by remember { mutableStateOf("") }
@@ -372,6 +396,16 @@ private fun KeysScreen(
             }
         }
         item { SectionTitle("在线密钥源") }
+        item {
+            Button(
+                onClick = onUpdateIceman,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null)
+                Spacer(Modifier.size(8.dp))
+                Text("一键更新 Iceman mfc_default_keys.dic")
+            }
+        }
         items(sources) { source ->
             Card(
                 colors = CardDefaults.cardColors(
@@ -518,6 +552,202 @@ private fun FilesScreen(
             enabled = state.dump != null,
             onClick = onExportMfd,
         )
+    }
+}
+
+@Composable
+private fun EmulationScreen(
+    state: AppState,
+    profiles: List<EmulationProfile>,
+    activeProfile: EmulationProfile?,
+    onSave: (String) -> Unit,
+    onActivate: (EmulationProfile) -> Unit,
+    onDeactivate: () -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var profileName by remember { mutableStateOf("") }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SectionTitle("保存当前卡片")
+        }
+        item {
+            OutlinedTextField(
+                value = profileName,
+                onValueChange = { profileName = it },
+                label = { Text("配置名称（可选）") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            Button(
+                onClick = {
+                    onSave(profileName)
+                    profileName = ""
+                },
+                enabled = state.ndefMessageHex != null || state.dump != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null)
+                Spacer(Modifier.size(8.dp))
+                Text("保存为卡片配置")
+            }
+        }
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (activeProfile == null) {
+                        MaterialTheme.colorScheme.surface
+                    } else {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    },
+                ),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.PhoneAndroid,
+                        contentDescription = null,
+                        tint = if (activeProfile == null) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                    )
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 12.dp),
+                    ) {
+                        Text(
+                            activeProfile?.name ?: "当前未启用模拟",
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            if (activeProfile == null) {
+                                "启用后 NFC 读卡模式将自动暂停"
+                            } else {
+                                "Type 4 NDEF 模拟中 · 手机需保持解锁"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (activeProfile != null) {
+                        IconButton(onClick = onDeactivate) {
+                            Icon(Icons.Default.Stop, contentDescription = "停止模拟")
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                "Android 可模拟 NFC Forum Type 4 NDEF。MIFARE Classic 的 UID、Crypto-1 和扇区命令不能由手机 HCE 复现，Classic 配置会保留给 Proxmark3 等外接硬件。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        item { SectionTitle("已保存配置 · ${profiles.size}") }
+        if (profiles.isEmpty()) {
+            item {
+                Text(
+                    "读取 NDEF 卡片，或完成 Classic 解密与备份后，即可在这里保存配置。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        items(profiles, key = { it.id }) { profile ->
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (profile.supportsAndroidHce) {
+                                Icons.Default.Nfc
+                            } else {
+                                Icons.Default.Memory
+                            },
+                            contentDescription = null,
+                            tint = if (profile.supportsAndroidHce) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.secondary
+                            },
+                        )
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 12.dp),
+                        ) {
+                            Text(profile.name, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                profile.sourceUid.ifBlank { "无 UID" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                if (profile.supportsAndroidHce) {
+                                    "Android Type 4 NDEF"
+                                } else {
+                                    "Classic dump · 需要外接硬件"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (profile.supportsAndroidHce) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                },
+                            )
+                        }
+                        IconButton(onClick = { onDelete(profile.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "删除配置")
+                        }
+                    }
+                    if (profile.supportsAndroidHce) {
+                        OutlinedButton(
+                            onClick = {
+                                if (activeProfile?.id == profile.id) onDeactivate()
+                                else onActivate(profile)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(
+                                if (activeProfile?.id == profile.id) {
+                                    Icons.Default.Stop
+                                } else {
+                                    Icons.Default.PlayArrow
+                                },
+                                contentDescription = null,
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                if (activeProfile?.id == profile.id) "停止模拟"
+                                else "启用模拟",
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

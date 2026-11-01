@@ -1,17 +1,22 @@
 package io.github.nfckeyrecovery
 
 import android.app.Application
+import android.content.pm.PackageManager
 import android.nfc.Tag
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.nfckeyrecovery.data.CardDump
 import io.github.nfckeyrecovery.data.CardSnapshot
+import io.github.nfckeyrecovery.data.EmulationProfile
+import io.github.nfckeyrecovery.data.EmulationRepository
 import io.github.nfckeyrecovery.data.KeyEntry
 import io.github.nfckeyrecovery.data.KeyFileCodec
 import io.github.nfckeyrecovery.data.KeyRepository
 import io.github.nfckeyrecovery.data.KeyScanProgress
+import io.github.nfckeyrecovery.data.NdefDumpCodec
 import io.github.nfckeyrecovery.data.RemoteKeySource
 import io.github.nfckeyrecovery.data.SectorKeyResult
+import io.github.nfckeyrecovery.data.toHex
 import io.github.nfckeyrecovery.hardware.ExternalDevice
 import io.github.nfckeyrecovery.hardware.Proxmark3UsbAdapter
 import io.github.nfckeyrecovery.nfc.NfcCardService
@@ -25,12 +30,15 @@ import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val keyRepository = KeyRepository(application)
+    private val emulationRepository = EmulationRepository(application)
     private val cardService = NfcCardService()
     private val proxmark = Proxmark3UsbAdapter(application)
     private var lastTag: Tag? = null
 
     val keys = keyRepository.keys
     val sources = keyRepository.sources
+    val emulationProfiles = emulationRepository.profiles
+    val activeEmulationProfile = emulationRepository.activeProfile
 
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
@@ -39,11 +47,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastTag = tag
         viewModelScope.launch {
             setBusy("正在识别卡片")
-            runCatching { withContext(Dispatchers.IO) { cardService.inspect(tag) } }
-                .onSuccess { card ->
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    cardService.inspect(tag) to
+                        runCatching { cardService.readNdefMessage(tag)?.toHex() }.getOrNull()
+                }
+            }
+                .onSuccess { (card, ndefMessageHex) ->
                     _state.update {
                         it.copy(
                             card = card,
+                            ndefMessageHex = ndefMessageHex,
+                            dump = null,
+                            keyMap = emptyList(),
                             message = "已识别 ${card.mifareType ?: "NFC 标签"}",
                             busy = false,
                             operation = null,
@@ -84,12 +100,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             setBusy("正在读取卡片备份")
             runCatching { cardService.readDump(tag, _state.value.keyMap) }
                 .onSuccess { dump ->
+                    val extractedNdef = NdefDumpCodec.findNdefMessage(dump)?.toHex()
                     _state.update {
                         it.copy(
                             dump = dump,
+                            ndefMessageHex = extractedNdef,
                             busy = false,
                             operation = null,
-                            message = "备份完成：${dump.blocks.count { block -> block.readable }}/${dump.blocks.size} 个数据块",
+                            message = buildString {
+                                append("备份完成：")
+                                append(dump.blocks.count { block -> block.readable })
+                                append("/")
+                                append(dump.blocks.size)
+                                append(" 个数据块")
+                                if (extractedNdef != null) append("，已提取 NDEF")
+                            },
                         )
                     }
                 }
@@ -122,14 +147,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 when (fileName.substringAfterLast('.', "").lowercase()) {
                     "mfd", "bin", "dump" -> {
                         val dump = KeyFileCodec.importMfd(bytes)
-                        _state.update { it.copy(dump = dump) }
+                        _state.update {
+                            it.copy(
+                                card = null,
+                                dump = dump,
+                                keyMap = emptyList(),
+                                ndefMessageHex = NdefDumpCodec.findNdefMessage(dump)?.toHex(),
+                            )
+                        }
                         0
                     }
                     "json" -> {
                         if (KeyFileCodec.looksLikeDumpJson(bytes)) {
                             val dump = KeyFileCodec.importDumpJson(bytes)
                             _state.update {
-                                it.copy(dump = dump, keyMap = dump.sectors)
+                                it.copy(
+                                    card = null,
+                                    dump = dump,
+                                    keyMap = dump.sectors,
+                                    ndefMessageHex = NdefDumpCodec.findNdefMessage(dump)?.toHex(),
+                                )
                             }
                             0
                         } else {
@@ -200,6 +237,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateIcemanDictionary() {
+        val source = sources.value.firstOrNull {
+            it.name.contains("Iceman", ignoreCase = true)
+        } ?: return setMessage("未找到 Iceman 字典源")
+        updateSource(source)
+    }
+
+    fun saveCurrentEmulationProfile(name: String) {
+        val current = _state.value
+        val card = current.card
+        val dump = current.dump
+        val ndef = current.ndefMessageHex
+        if (card == null && dump == null) return setMessage("请先读取一张卡片或导入 dump")
+        if (ndef == null && dump == null) {
+            return setMessage("当前卡片没有可保存的 NDEF 或 Classic dump")
+        }
+        val uid = dump?.uid ?: card?.uid.orEmpty()
+        val type = when {
+            ndef != null && dump != null -> "DECRYPTED_CLASSIC_NDEF"
+            ndef != null -> "NDEF_TAG"
+            else -> "MIFARE_CLASSIC_DUMP"
+        }
+        val profile = EmulationProfile(
+            id = "${uid.replace(":", "")}-${System.currentTimeMillis()}",
+            name = name.trim().ifBlank {
+                card?.mifareType ?: dump?.cardType ?: "NFC profile"
+            },
+            sourceUid = uid,
+            sourceKind = type,
+            createdAtEpochMillis = System.currentTimeMillis(),
+            ndefMessageHex = ndef,
+            classicDump = dump,
+        )
+        emulationRepository.save(profile)
+        setMessage(
+            if (profile.supportsAndroidHce) "卡片配置已保存，可启用 Type 4 NDEF 模拟"
+            else "Classic 配置已保存，需要外接硬件进行模拟",
+        )
+    }
+
+    fun activateEmulation(profile: EmulationProfile) {
+        if (!getApplication<Application>().packageManager.hasSystemFeature(
+                PackageManager.FEATURE_NFC_HOST_CARD_EMULATION,
+            )
+        ) {
+            return setMessage("此手机不支持 NFC Host Card Emulation")
+        }
+        runCatching { emulationRepository.activate(profile.id) }
+            .onSuccess { setMessage("已启用 ${profile.name}；请保持手机解锁并贴近读卡器") }
+            .onFailure(::setError)
+    }
+
+    fun deactivateEmulation() {
+        emulationRepository.deactivate()
+        setMessage("已停止卡片模拟，恢复 NFC 读卡模式")
+    }
+
+    fun deleteEmulationProfile(profileId: String) {
+        emulationRepository.delete(profileId)
+        setMessage("卡片配置已删除")
+    }
+
     fun detectExternalHardware() {
         viewModelScope.launch {
             runCatching { proxmark.detect() }
@@ -240,6 +339,7 @@ data class AppState(
     val card: CardSnapshot? = null,
     val keyMap: List<SectorKeyResult> = emptyList(),
     val dump: CardDump? = null,
+    val ndefMessageHex: String? = null,
     val progress: KeyScanProgress? = null,
     val externalDevices: List<ExternalDevice> = emptyList(),
     val busy: Boolean = false,

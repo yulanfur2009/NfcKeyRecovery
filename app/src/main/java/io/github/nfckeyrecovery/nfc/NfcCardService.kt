@@ -3,6 +3,7 @@ package io.github.nfckeyrecovery.nfc
 import android.nfc.Tag
 import android.nfc.tech.IsoDep
 import android.nfc.tech.MifareClassic
+import android.nfc.tech.Ndef
 import android.nfc.tech.NfcA
 import io.github.nfckeyrecovery.data.BlockRecord
 import io.github.nfckeyrecovery.data.CardDump
@@ -18,6 +19,16 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 
 class NfcCardService {
+    fun readNdefMessage(tag: Tag): ByteArray? {
+        val ndef = Ndef.get(tag) ?: return null
+        return try {
+            ndef.connect()
+            ndef.ndefMessage?.toByteArray() ?: ndef.cachedNdefMessage?.toByteArray()
+        } finally {
+            runCatching { ndef.close() }
+        }
+    }
+
     fun inspect(tag: Tag): CardSnapshot {
         val nfcA = NfcA.get(tag)
         val isoDep = IsoDep.get(tag)

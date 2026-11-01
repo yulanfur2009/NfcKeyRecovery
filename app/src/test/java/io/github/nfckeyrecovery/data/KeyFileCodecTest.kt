@@ -66,4 +66,26 @@ class KeyFileCodecTest {
 
         assertFalse(decodeAccessBits(trailer).valid)
     }
+
+    @Test
+    fun extractsNdefMessageFromClassicDumpDataBlocks() {
+        val ndef = "D1010C55016578616D706C652E636F6D".hexToBytes()
+        val tlvBlock = (byteArrayOf(0x03, ndef.size.toByte()) + ndef + byteArrayOf(0xFE.toByte()))
+            .copyOf(32)
+        val dump = CardDump(
+            uid = "01:02:03:04",
+            cardType = "MIFARE Classic 1K",
+            createdAtEpochMillis = 1L,
+            sectors = emptyList(),
+            blocks = listOf(
+                BlockRecord(4, tlvBlock.copyOfRange(0, 16).toHex()),
+                BlockRecord(5, tlvBlock.copyOfRange(16, 32).toHex()),
+            ),
+        )
+
+        val extracted = NdefDumpCodec.findNdefMessage(dump)
+
+        assertArrayEquals(ndef, extracted)
+        assertTrue(NdefDumpCodec.isStructurallyValidNdef(ndef))
+    }
 }

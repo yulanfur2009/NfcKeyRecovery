@@ -3,9 +3,11 @@
     <cloud-backup>
         <exclude domain="file" path="keys/" />
         <exclude domain="file" path="dumps/" />
+        <exclude domain="file" path="emulation/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="keys/" />
         <exclude domain="file" path="dumps/" />
+        <exclude domain="file" path="emulation/" />
     </device-transfer>
 </data-extraction-rules>
