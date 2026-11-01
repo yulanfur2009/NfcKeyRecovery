@@ -69,6 +69,15 @@ object KeyFileCodec {
     fun exportDumpJson(dump: CardDump): ByteArray =
         json.encodeToString(dump).encodeToByteArray()
 
+    fun importDumpJson(bytes: ByteArray): CardDump =
+        json.decodeFromString(bytes.decodeToString())
+
+    fun looksLikeDumpJson(bytes: ByteArray): Boolean =
+        runCatching {
+            val root = json.parseToJsonElement(bytes.decodeToString()).jsonObject
+            root.containsKey("blocks") && root.containsKey("cardType")
+        }.getOrDefault(false)
+
     fun exportMfd(dump: CardDump): ByteArray {
         val maxBlock = dump.blocks.maxOfOrNull { it.block } ?: return ByteArray(0)
         val output = ByteArray((maxBlock + 1) * 16)

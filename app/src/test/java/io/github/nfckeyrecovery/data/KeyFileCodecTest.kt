@@ -34,6 +34,23 @@ class KeyFileCodecTest {
     }
 
     @Test
+    fun jsonDumpRoundTrips() {
+        val original = CardDump(
+            uid = "01:02:03:04",
+            cardType = "MIFARE Classic 1K",
+            createdAtEpochMillis = 1L,
+            sectors = listOf(SectorKeyResult(0, keyA = "FFFFFFFFFFFF")),
+            blocks = listOf(BlockRecord(0, "00112233445566778899AABBCCDDEEFF")),
+        )
+
+        val encoded = KeyFileCodec.exportDumpJson(original)
+        val decoded = KeyFileCodec.importDumpJson(encoded)
+
+        assertTrue(KeyFileCodec.looksLikeDumpJson(encoded))
+        assertEquals(original, decoded)
+    }
+
+    @Test
     fun decodesTransportConfigurationAccessBits() {
         val trailer = "FFFFFFFFFFFFFF078069FFFFFFFFFFFF".hexToBytes()
 

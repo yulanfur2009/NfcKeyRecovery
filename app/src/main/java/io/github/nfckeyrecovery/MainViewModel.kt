@@ -125,6 +125,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _state.update { it.copy(dump = dump) }
                         0
                     }
+                    "json" -> {
+                        if (KeyFileCodec.looksLikeDumpJson(bytes)) {
+                            val dump = KeyFileCodec.importDumpJson(bytes)
+                            _state.update {
+                                it.copy(dump = dump, keyMap = dump.sectors)
+                            }
+                            0
+                        } else {
+                            keyRepository.addKeys(
+                                KeyFileCodec.parseKeys(bytes, fileName, "import:$fileName"),
+                            )
+                        }
+                    }
                     else -> keyRepository.addKeys(
                         KeyFileCodec.parseKeys(bytes, fileName, "import:$fileName"),
                     )

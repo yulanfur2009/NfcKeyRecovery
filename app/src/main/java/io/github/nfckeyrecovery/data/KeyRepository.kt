@@ -150,6 +150,11 @@ class KeyRepository(private val context: Context) {
 
         val DEFAULT_SOURCES = listOf(
             RemoteKeySource(
+                name = "NfcKeyRecovery public key feed",
+                url = "https://raw.githubusercontent.com/yulanfur2009/NfcKeyRecovery/" +
+                    "main/key-feed/default-keys.json",
+            ),
+            RemoteKeySource(
                 name = "MifareClassicTool public defaults",
                 url = "https://raw.githubusercontent.com/ikarus23/MifareClassicTool/" +
                     "master/Mifare%20Classic%20Tool/app/src/main/assets/key-files/std.keys",
